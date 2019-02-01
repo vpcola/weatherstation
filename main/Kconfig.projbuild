@@ -1,0 +1,51 @@
+menu "IOTCebu Configuration"
+
+menu "I2C Master"
+
+config I2C_MASTER_SCL
+    int "SCL GPIO Num"
+    default 22 
+    help
+        GPIO number for I2C Master clock line.
+
+config I2C_MASTER_SDA
+    int "SDA GPIO Num"
+    default 21
+    help
+        GPIO number for I2C Master data line.
+
+config I2C_MASTER_PORT_NUM
+    int "Port Number"
+    default 0
+    help
+        Port number for I2C Master device.
+
+config I2C_MASTER_FREQUENCY
+    int "Master Frequency"
+    default 100000
+    help
+        I2C Speed of Master device.
+endmenu
+
+config ENABLE_TOUCH_WAKEUP
+    bool "Enable touch wake up"
+    default y
+    help
+        This option enables wake up from deep sleep using touch pads
+        TOUCH8 and TOUCH9, which correspond to GPIO33 and GPIO32.
+
+config WAKEUP_INTERVAL
+    int "Wakeup interval in seconds"
+    default 60
+    help
+        This is the interval time for timed wakeup in seconds.
+
+config WAKEUP_LED
+    int "GPIO Pin connected to Wakeup LED"
+    range 0 34
+    default 15
+    help 
+        This option sets the wakeup led pin that is connected to the
+        wakeup led.
+
+endmenu
