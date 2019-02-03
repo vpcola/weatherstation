@@ -50,6 +50,7 @@ static esp_err_t i2c_master_init();
 
 void app_main()
 {
+    float currTemp, currHumid;
     struct timeval now;
     gettimeofday(&now, NULL);
     int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -64,7 +65,12 @@ void app_main()
 
     if ( hdc1080_init(I2C_MASTER_NUM) == ESP_OK)
     {
-        hdc1080_read_temperature(I2C_MASTER_NUM); 
+        if ( hdc1080_read_temperature(I2C_MASTER_NUM, &currTemp, &currHumid) == ESP_OK)
+        {
+            printf("Current temperature = %.2f C, Relative Humidity = %.2f %%\n", 
+                currTemp, currHumid);
+        }
+
     }
 
     switch (esp_sleep_get_wakeup_cause()) {
