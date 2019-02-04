@@ -27,6 +27,78 @@ config I2C_MASTER_FREQUENCY
         I2C Speed of Master device.
 endmenu
 
+menu "RFM95W Lora Module"
+
+config RFM95W_SCLK
+    int "SPI SCLK Pin"
+    range 0 34
+    default 18
+    help
+        "The SPI SCLK pin connected to the Lora RFM95W module"
+
+config RFM95W_MISO
+    int "SPI MISO Pin"
+    range 0 34
+    default 19
+    help
+        "The SPI MISO pin connected to the Lora RFM95W module"
+
+config RFM95W_MOSI
+    int "SPI MOSI Pin"
+    range 0 34
+    default 23
+    help 
+        "The SPI MOSI pin connected to the Lora RFM95W module"
+
+config RFM95W_NSS
+    int "SPI Chip Select Pin"
+    range 0 34
+    default 5
+    help
+        "The chip select pin connected to the Lora RFM95W module"
+
+config RFM95W_RST
+    int "Lora RFM95W reset pin"
+    range 0 34
+    default 25
+    help 
+        "The reset pin connected to the Lora RFM95W module"
+
+config RFM95W_DIO0
+    int "Lora RFM95W DIO0 pin"
+    range 0 34
+    default 26
+    help
+        "The DIO0 pin of the RFM95W module"
+
+config RFM95W_DIO1
+    int "Lora RFM95W DIO1 pin"
+    range 0 34
+    default 34
+    help
+        "The DIO1 pin of the RFM95W module"
+
+endmenu
+
+menu "TTN Configuration"
+
+config TTN_DEV_EUI
+    string "TTN Dev EUI"
+    help
+        "Copy the device EUI in the TTN device overview page."
+
+config TTN_APP_EUI
+    string "TTN APP EUI"
+    help
+        "The Application EUI as shown on the TTN console when creating the app"
+
+config TTN_APP_KEY
+    string "TTN APP Key"
+    help 
+        "The TTN app key as shown on the TTN console when creating the app"
+
+endmenu
+
 config ENABLE_TOUCH_WAKEUP
     bool "Enable touch wake up"
     default y

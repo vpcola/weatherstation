@@ -68,9 +68,9 @@ esp_err_t hdc1080_read_temperature(i2c_port_t i2cnum, float * temperature, float
    
     i2c_master_write_byte(cmd, (HDC1080_ADDR << 1) | READ_BIT, ACK_CHECK_EN);
     if (size > 1) {
-	    i2c_master_read(cmd, ((uint8_t *)&data[0]), size - 1, ACK_VAL);
+	    i2c_master_read(cmd, ((uint8_t *)&data[0]), size - 1, I2C_MASTER_ACK);
     }
-    i2c_master_read_byte(cmd, ((uint8_t *)&data[0]) + size - 1, NACK_VAL);
+    i2c_master_read_byte(cmd, ((uint8_t *)&data[0]) + size - 1, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
 
     err = i2c_master_cmd_begin(i2cnum, cmd, 1000 / portTICK_RATE_MS);
