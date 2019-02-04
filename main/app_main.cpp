@@ -89,7 +89,7 @@ static void gpio_led_init(void);
 static void lora_module_init(void);
 static void configure_deep_sleep_params(void);
 
-void send_ttn_message(void * pvParameter);
+void send_ttn_message(void);
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
 
 extern "C" void app_main()
@@ -141,8 +141,15 @@ extern "C" void app_main()
             printf("Not a deep sleep reset\n");
     }
 
-    printf("Sending lorawan message ...\n");
-    // TODO: Send updates to TTN here
+    printf("Joining TTN ...\n");
+    if (ttn.join())
+    {
+        printf("Sending lorawan message ...\n");
+        send_ttn_message();
+    }else
+    {
+        printf("Join failed!!\n");
+    }
 
 
     // The delay here is a MUST!, this is to ensure that
@@ -221,7 +228,7 @@ static void lora_module_init(void)
     ttn.configurePins(TTN_SPI_HOST, TTN_PIN_NSS, TTN_PIN_RXTX, TTN_PIN_RST, TTN_PIN_DIO0, TTN_PIN_DIO1);
 
     // The below line can be commented after the first run as the data is saved in NVS
-    // ttn.provision(devEui, appEui, appKey);
+    ttn.provision(devEui, appEui, appKey);
 
     ttn.onMessage(receive_ttn_message);
 }
@@ -294,7 +301,7 @@ static void calibrate_touch_pad(touch_pad_t pad)
 }
 #endif // CONFIG_ENABLE_TOUCH_WAKEUP
 
-void send_ttn_message(void* pvParameter)
+void send_ttn_message()
 {
     float currTemp = 0.0;
     float currHumid = 0.0;
