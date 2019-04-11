@@ -76,103 +76,59 @@ const char *appKey = CONFIG_TTN_APP_KEY;
 static TheThingsNetwork ttn;
 static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 
-const unsigned RX_WAIT_TIME = 10; // Wait 10 seconds before going deep sleep
-static RTC_DATA_ATTR struct timeval sleep_enter_time;
-
-#ifdef CONFIG_ENABLE_TOUCH_WAKEUP
-#define TOUCH_THRESH_NO_USE 0
-static void calibrate_touch_pad(touch_pad_t pad);
-#endif
-
 static esp_err_t i2c_master_init(void);
 static void gpio_led_init(void);
-static void lora_module_init(void);
-static void configure_deep_sleep_params(void);
+static int32_t get_restart_counter(uint32_t);
+static void lora_module_init(bool);
+void ttn_send_thread(void* pvParameter);
 
 void send_ttn_message(void);
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
 
 extern "C" void app_main()
 {
-    float currTemp, currHumid;
-    struct timeval now;
-
-    // Calculate how much time was spent in deep sleep mode
-    gettimeofday(&now, NULL);
-    int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
-
+    int restart_counter = get_restart_counter( -1 );
+    bool do_provision = (restart_counter <= 0);
     i2c_master_init();
     gpio_led_init();
-    lora_module_init();
 
-    if ( hdc1080_init(I2C_MASTER_NUM) == ESP_OK)
+    // Initialize TTN, do provisioning
+    // if restart_counter is zero (or invalid = -1)
+    lora_module_init(do_provision);
+
+    if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
     {
-        if ( hdc1080_read_temperature(I2C_MASTER_NUM, &currTemp, &currHumid) == ESP_OK)
-        {
-            printf("Current temperature = %.2f C, Relative Humidity = %.2f %%\n", 
-                currTemp, currHumid);
-        }
-
+        printf("Failed to initialize HDC1080 sensor!\n");
     }
 
-    switch (esp_sleep_get_wakeup_cause()) {
-        case ESP_SLEEP_WAKEUP_EXT1: {
-            uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
-            if (wakeup_pin_mask != 0) {
-                int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
-                printf("Wake up from GPIO %d\n", pin);
-            } else {
-                printf("Wake up from GPIO\n");
-            }
-            break;
-        }
-        case ESP_SLEEP_WAKEUP_TIMER: {
-            printf("Wake up from timer. Time spent in deep sleep: %dms\n", sleep_time_ms);
-            break;
-        }
-#ifdef CONFIG_ENABLE_TOUCH_WAKEUP
-        case ESP_SLEEP_WAKEUP_TOUCHPAD: {
-            printf("Wake up from touch on pad %d\n", esp_sleep_get_touchpad_wakeup_status());
-            break;
-        }
-#endif // CONFIG_ENABLE_TOUCH_WAKEUP
-        case ESP_SLEEP_WAKEUP_UNDEFINED:
-        default:
-            printf("Not a deep sleep reset\n");
-    }
 
     printf("Joining TTN ...\n");
     if (ttn.join())
     {
-        printf("Sending lorawan message ...\n");
-        send_ttn_message();
+        printf("Starting lorawan senter thread! ...\n");
+        // Start the lorawan sender
+        xTaskCreate(ttn_send_thread, "ttn_send_thread", 1024 * 4, (void* )0, 3, NULL);
     }else
     {
         printf("Join failed!!\n");
     }
 
-
-    // The delay here is a MUST!, this is to ensure that
-    // we receive messages from the allocated ping slot 
-    // (usually after we sent a message to TTN for a Lora 
-    // class A device).
-    printf("Waiting for RX packets ...\n");
-    vTaskDelay( RX_WAIT_TIME * 1000 / portTICK_PERIOD_MS );
-
-    // Configure items before going to deep sleep mode
-
-    printf("Entering deep sleep\n");
-    configure_deep_sleep_params();
-
-    // Set the LED off.
-    gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
-
-    // Record the time when we entered deep sleep
-    gettimeofday(&sleep_enter_time, NULL);
-
-    // Deep sleep on!
-    esp_deep_sleep_start();
 }
+
+void ttn_send_thread(void* pvParameter)
+{
+    while (1) {
+        /* Set LED on (output low) */
+        gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
+
+        send_ttn_message();
+
+        gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
+        printf("Sleep (%d) seconds ... \n", CONFIG_TX_WAIT_INTERVAL);
+        vTaskDelay(CONFIG_TX_WAIT_INTERVAL * 1000 / portTICK_PERIOD_MS);
+    }
+}
+
 
 /**
 * @brief i2c master initialization
@@ -198,19 +154,74 @@ static void gpio_led_init()
     gpio_pad_select_gpio((gpio_num_t) CONFIG_WAKEUP_LED);
     /* Set the GPIO as a push/pull output */
     gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_OUTPUT);
-    /* Set LED on (output low) */
-    gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
 }
 
-static void lora_module_init(void)
+static int32_t get_restart_counter(uint32_t initval)
+{
+    int32_t restart_counter = initval;
+    esp_err_t err;
+
+    // Initialize the NVS (non-volatile storage) for saving and restoring the keys
+    err = nvs_flash_init();
+    ESP_ERROR_CHECK(err);
+
+    nvs_handle my_handle;
+    printf("Opening Non-Volatile Storage (NVS) handle ...");
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK)
+    {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+        return -1;
+    }
+    else
+    {
+        printf("Done!\n");
+
+        // Read 
+        printf("Reading restart counter from NVS ...");
+        err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
+        switch(err)
+        {
+            case ESP_OK:
+                printf("Done\n");
+                printf("Restart counter = %d\n", restart_counter);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                printf("The value is not initialized yet!\n");
+                break;
+            default:
+                printf("Error (%s) reading!\n", esp_err_to_name(err));
+        }
+
+        // Write
+        printf("Updating restart counter in NVS ...");
+        restart_counter ++;
+        err = nvs_set_i32(my_handle, "restart_counter", restart_counter);
+        printf((err != ESP_OK) ? "Failed!\n" : "Done!\n");
+
+        // Commit written value.
+        // After setting any values, nvs_commit() must be called to ensure changes
+        // are written to flash storage. Implementations may write to storage at other times.
+        // but this is not guaranteed.
+        printf("Committing updates in NVS ... ");
+        err = nvs_commit(my_handle);
+        printf((err != ESP_OK) ? "Failed!\n" : "Done!\n");
+
+        // Close
+        nvs_close(my_handle);
+
+    }
+    // Return the value of the restart counter
+    return restart_counter;
+
+
+}
+
+static void lora_module_init(bool do_provision)
 {
     esp_err_t err;
     // Initialize the GPIO ISR handler service
     err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    ESP_ERROR_CHECK(err);
-
-    // Initialize the NVS (non-volatile storage) for saving and restoring the keys
-    err = nvs_flash_init();
     ESP_ERROR_CHECK(err);
 
     // Initialize SPI bus
@@ -227,87 +238,25 @@ static void lora_module_init(void)
     // Configure the SX127x pins
     ttn.configurePins(TTN_SPI_HOST, TTN_PIN_NSS, TTN_PIN_RXTX, TTN_PIN_RST, TTN_PIN_DIO0, TTN_PIN_DIO1);
 
-    // The below line can be commented after the first run as the data is saved in NVS
-    ttn.provision(devEui, appEui, appKey);
+    if (do_provision)
+    {
+        // Only do provision if we are starting for the first time.
+        printf("Starting TTN provisioning!\n");
+        ttn.provision(devEui, appEui, appKey);
+    }
 
     ttn.onMessage(receive_ttn_message);
 }
-
-static void configure_deep_sleep_params(void)
-{
-    // Configure timer wakeup
-    const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
-    printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
-    esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);
-
-    // Configure GPIO (external wakup pin)
-    const int ext_wakeup_pin_1 = 27;
-    const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
-
-    printf("Enabling EXT1 wakeup on pins GPIO%d\n", ext_wakeup_pin_1);
-    esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
-
-#ifdef CONFIG_ENABLE_TOUCH_WAKEUP
-    // Initialize touch pad peripheral.
-    // The default fsm mode is software trigger mode.
-    touch_pad_init();
-    // If use touch pad wake up, should set touch sensor FSM mode at 'TOUCH_FSM_MODE_TIMER'.
-    touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER);
-    // Set reference voltage for charging/discharging
-    // In this case, the high reference valtage will be 2.4V - 1V = 1.4V
-    // The low reference voltage will be 0.5
-    // The larger the range, the larger the pulse count value.
-    touch_pad_set_voltage(TOUCH_HVOLT_2V4, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V);
-    //init RTC IO and mode for touch pad.
-    touch_pad_config(TOUCH_PAD_NUM8, TOUCH_THRESH_NO_USE);
-    touch_pad_config(TOUCH_PAD_NUM9, TOUCH_THRESH_NO_USE);
-    calibrate_touch_pad(TOUCH_PAD_NUM8);
-    calibrate_touch_pad(TOUCH_PAD_NUM9);
-    printf("Enabling touch pad wakeup\n");
-    esp_sleep_enable_touchpad_wakeup();
-
-#endif // CONFIG_ENABLE_TOUCH_WAKEUP
-
-
-    // Isolate GPIO12 pin from external circuits. This is needed for modules
-    // which have an external pull-up resistor on GPIO12 (such as ESP32-WROVER)
-    // to minimize current consumption.
-    rtc_gpio_isolate(GPIO_NUM_12);
-}
-
-
-
-#ifdef CONFIG_ENABLE_TOUCH_WAKEUP
-static void calibrate_touch_pad(touch_pad_t pad)
-{
-    int avg = 0;
-    const size_t calibration_count = 128;
-    for (int i = 0; i < calibration_count; ++i) {
-        uint16_t val;
-        touch_pad_read(pad, &val);
-        avg += val;
-    }
-    avg /= calibration_count;
-    const int min_reading = 300;
-    if (avg < min_reading) {
-        printf("Touch pad #%d average reading is too low: %d (expecting at least %d). "
-               "Not using for deep sleep wakeup.\n", pad, avg, min_reading);
-        touch_pad_config(pad, 0);
-    } else {
-        int threshold = avg - 100;
-        printf("Touch pad #%d average: %d, wakeup threshold set to %d.\n", pad, avg, threshold);
-        touch_pad_config(pad, threshold);
-    }
-}
-#endif // CONFIG_ENABLE_TOUCH_WAKEUP
 
 void send_ttn_message()
 {
     float currTemp = 0.0;
     float currHumid = 0.0;
+    float waterLevel = 0.0;
 
     lpp.reset();
 
+    printf("Waiting for next available transmit event ...\n");
     if ( hdc1080_read_temperature(I2C_MASTER_NUM, &currTemp, &currHumid) == ESP_OK)
     {
 
@@ -315,11 +264,13 @@ void send_ttn_message()
                 currTemp, currHumid);
     }
 
+    // for now random values for water level
+    waterLevel = rand() % 10 + 1;
     lpp.addTemperature(0, currTemp);
     lpp.addRelativeHumidity(1, currHumid);    
+    lpp.addAnalogInput(2, waterLevel); 
 
 
-    printf("Sending message...\n");
     TTNResponseCode res = ttn.transmitMessage(lpp.getBuffer(), lpp.getSize());
     printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
 
