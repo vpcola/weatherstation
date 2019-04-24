@@ -124,8 +124,8 @@ void ttn_send_thread(void* pvParameter)
         send_ttn_message();
 
         gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
-        printf("Sleep (%d) seconds ... \n", CONFIG_TX_WAIT_INTERVAL);
-        vTaskDelay(CONFIG_TX_WAIT_INTERVAL * 1000 / portTICK_PERIOD_MS);
+        printf("Sleep (%d) seconds ... \n", CONFIG_WAKEUP_INTERVAL);
+        vTaskDelay(CONFIG_WAKEUP_INTERVAL * 1000 / portTICK_PERIOD_MS);
     }
 }
 
