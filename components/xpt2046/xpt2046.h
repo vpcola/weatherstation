@@ -21,7 +21,7 @@ extern "C" {
 /*********************
  *      DEFINES
  *********************/
-#define XPT2046_IRQ 25
+#define XPT2046_IRQ CONFIG_XPT2046_IRQ 
 
 #define XPT2046_AVG 4
 #define XPT2046_X_MIN       1000

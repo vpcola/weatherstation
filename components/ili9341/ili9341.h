@@ -19,9 +19,9 @@ extern "C" {
  *      DEFINES
  *********************/
 
-#define ILI9341_DC   19
-#define ILI9341_RST  18
-#define ILI9341_BCKL 23
+#define ILI9341_DC   CONFIG_ILI9341_DC 
+#define ILI9341_RST  CONFIG_ILI9341_RESET
+#define ILI9341_BCKL CONFIG_ILI9341_BCKL
 
 /**********************
  *      TYPEDEFS

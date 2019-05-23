@@ -19,9 +19,9 @@ extern "C" {
  *      DEFINES
  *********************/
 
-#define DISP_SPI_MOSI 13
-#define DISP_SPI_CLK  14
-#define DISP_SPI_CS   5
+#define DISP_SPI_MOSI CONFIG_ILI9341_MOSI 
+#define DISP_SPI_CLK  CONFIG_ILI9341_MISO
+#define DISP_SPI_CS   CONFIG_ILI9341_CS 
 
 
 /**********************
