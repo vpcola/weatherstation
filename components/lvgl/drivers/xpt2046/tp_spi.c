@@ -10,6 +10,7 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "shared_spi.h"
 #include <string.h>
 
 /*********************
@@ -24,11 +25,13 @@
 /**********************
  *  STATIC PROTOTYPES
  **********************/
-static spi_device_handle_t spi;
+static void IRAM_ATTR touch_spi_ready (spi_transaction_t *trans);
 
 /**********************
  *  STATIC VARIABLES
  **********************/
+static spi_device_handle_t spi;
+static volatile bool spi_trans_in_progress;
 
 /**********************
  *      MACROS
@@ -42,46 +45,45 @@ void tp_spi_init(void)
 
 	esp_err_t ret;
 
-	spi_bus_config_t buscfg={
-		.miso_io_num=TP_SPI_MISO,
-		.mosi_io_num=TP_SPI_MOSI,
-		.sclk_io_num=TP_SPI_CLK,
-		.quadwp_io_num=-1,
-		.quadhd_io_num=-1
-	};
+	assert(shared_spi_is_initialized()); 
 
 	spi_device_interface_config_t devcfg={
-		.clock_speed_hz=10*1000*1000,           //Clock out at 80 MHz
-		.mode=0,                                //SPI mode 0
-		.spics_io_num=-1,              //CS pin
-		.queue_size=1,
-		.pre_cb=NULL,
-		.post_cb=NULL,
+		.clock_speed_hz = 10*1000*1000,           //Clock out at 80 MHz
+		.mode = 0,                                //SPI mode 0
+		.spics_io_num = -1,              //CS pin
+		.queue_size = 1,
+		.pre_cb = NULL,
+		.post_cb = touch_spi_ready,
 	};
 
-	//Initialize the SPI bus
-	ret=spi_bus_initialize(VSPI_HOST, &buscfg, 2);
-	assert(ret==ESP_OK);
-
 	//Attach the LCD to the SPI bus
-	ret=spi_bus_add_device(VSPI_HOST, &devcfg, &spi);
+	ret=spi_bus_add_device(shared_spi_get_host(), &devcfg, &spi);
 	assert(ret==ESP_OK);
 }
 
 uint8_t tp_spi_xchg(uint8_t data_send)
 {
-    uint8_t data_rec = 0;
+	uint8_t data_rec = 0;
 	spi_transaction_t t;
-    memset(&t, 0, sizeof(t));       	//Zero out the transaction
+	memset(&t, 0, sizeof(t));       	//Zero out the transaction
 	t.length = 8;              //Length is in bytes, transaction length is in bits.
 	t.tx_buffer = &data_send;            //Data
 	t.rx_buffer = &data_rec;
 	esp_err_t ret;
 
+	// Set a variable to watch
+	spi_trans_in_progress = true;
 	spi_device_queue_trans(spi, &t, portMAX_DELAY);
 
-	spi_transaction_t * rt;
-	spi_device_get_trans_result(spi, &rt, portMAX_DELAY);
+	/* We can either call spi_device_get_trans_result()
+	 * or check for a variable that is being set when
+	 * a DMA or SPI completes the transaction
+	 **/
+	/*
+	   spi_transaction_t * rt;
+	   spi_device_get_trans_result(spi, &rt, portMAX_DELAY);
+	   */
+	while(spi_trans_in_progress == true);
 
 	return data_rec;
 }
@@ -90,3 +92,8 @@ uint8_t tp_spi_xchg(uint8_t data_send)
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+static void IRAM_ATTR touch_spi_ready (spi_transaction_t *trans)
+{
+    spi_trans_in_progress = false;
+}
+

@@ -19,11 +19,7 @@ extern "C" {
  *      DEFINES
  *********************/
 
-#define TP_SPI_MOSI CONFIG_XPT2046_MOSI 
-#define TP_SPI_MISO CONFIG_XPT2046_MISO
-#define TP_SPI_CLK  CONFIG_XPT2046_SCK
 #define TP_SPI_CS   CONFIG_XPT2046_CS 
-
 
 /**********************
  *      TYPEDEFS
