@@ -10,7 +10,6 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "shared_spi.h"
 #include <string.h>
 
 /*********************
@@ -40,12 +39,11 @@ static volatile bool spi_trans_in_progress;
 /**********************
  *   GLOBAL FUNCTIONS
  **********************/
-void tp_spi_init(void)
+void tp_spi_init(spi_host_device_t spihost)
 {
 
 	esp_err_t ret;
 
-	assert(shared_spi_is_initialized()); 
 
 	spi_device_interface_config_t devcfg={
 		.clock_speed_hz = 10*1000*1000,           //Clock out at 80 MHz
@@ -57,7 +55,7 @@ void tp_spi_init(void)
 	};
 
 	//Attach the LCD to the SPI bus
-	ret=spi_bus_add_device(shared_spi_get_host(), &devcfg, &spi);
+	ret=spi_bus_add_device(spihost, &devcfg, &spi);
 	assert(ret==ESP_OK);
 }
 

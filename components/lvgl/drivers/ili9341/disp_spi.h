@@ -14,6 +14,9 @@ extern "C" {
  *      INCLUDES
  *********************/
 #include <stdint.h>
+#include "esp_system.h"
+#include "driver/spi_master.h"
+
 
 /*********************
  *      DEFINES
@@ -31,7 +34,7 @@ extern "C" {
 /**********************
  * GLOBAL PROTOTYPES
  **********************/
-void disp_spi_init(void);
+void disp_spi_init(spi_host_device_t spihost);
 void disp_spi_send_data(uint8_t * data, uint16_t length);
 void disp_spi_send_colors(uint8_t * data, uint16_t length);
 

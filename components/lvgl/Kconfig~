@@ -1,48 +1,6 @@
 menu "LVGL Driver Settings"
 
-choice SHARED_SPI_HOST
-	prompt "Host"
-	default HSPI_HOST
-	help
-	    The ESP32 has 3 spi buses - spi, vspi, and hspi. We are left with vspi and hspi for connecting with external sensors.  
-
-	config HSPI_HOST
-	bool "HSPI"
-
-	config VSPI_HOST
-	bool "VSPI"
-
-endchoice
-
-menu "Shared SPI settings"
-	depends on SHARED_SPI_HOST
-
-config SHARED_SPI_USE_DMA
-	bool "Use DMA for SPI Transactions?"
-
-config SHARED_SPI_MISO
-	int "Shared MISO Pin"
-	default 19
-	range 0 39
-
-config SHARED_SPI_MOSI
-	int "Shared MOSI Pin"
-	default 23
-	range 0 39
-
-config SHARED_SPI_SCK
-	int "Shared SCK Pin"
-	default 18
-	range 0 39
-
-config SHARED_SPI_TRANS_SIZE
-	int "Shared spi transfer size"
-	default 4094
-
-endmenu
-
 menu "ILI9341 Settings"
-depends on SHARED_SPI_HOST
 
 config ILI9341_CS
 	int "ILI9341 CS Pin"
