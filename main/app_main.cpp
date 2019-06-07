@@ -20,6 +20,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "driver/touch_pad.h"
+#include "driver/rtc_io.h"
 #include "driver/adc.h"
 #include "driver/rtc_io.h"
 #include "driver/i2c.h"
@@ -61,6 +62,11 @@
 // to 51 bytes.
 #define MAX_LORA_PAYLOAD 51
 
+
+/*************************
+ * Static Variables      *
+ *                       *
+ *************************/
 // NOTE:
 // The LoRaWAN frequency and the radio chip must be configured by running 'make menuconfig'.
 // Go to Components / The Things Network, select the appropriate values and save.
@@ -76,20 +82,54 @@ const char *appKey = CONFIG_TTN_APP_KEY;
 static TheThingsNetwork ttn;
 static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 
+static RTC_DATA_ATTR struct timeval sleep_enter_time;
+
+/*************************
+ * Static Functions      *
+ *                       *
+ *************************/
+
+static void ttn_send_data(void);
 static esp_err_t i2c_master_init(void);
 static void gpio_led_init(void);
 static int32_t get_restart_counter(uint32_t);
 static void lora_module_init(bool);
-void ttn_send_thread(void* pvParameter);
 
+/**************************
+ * Forward declarations   *
+ *                        *
+ **************************/
+void ttn_send_thread(void* pvParameter);
 void send_ttn_message(void);
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
 
+/**************************
+ * Main entry function    *
+ *                        *
+ **************************/
 extern "C" void app_main()
 {
     int restart_counter = get_restart_counter( -1 );
     bool do_provision = (restart_counter <= 0);
-    i2c_master_init();
+
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+
+	switch (esp_sleep_get_wakeup_cause())
+	{
+		case ESP_SLEEP_WAKEUP_TIMER: {
+										 printf("Wake up from timer. Time spent in deep sleep: %dms\n", sleep_time_ms);
+										 break;
+									 }
+		default:
+									 {
+										 printf("Wake up from other sources ....\n");
+										 break;
+									 }
+	}
+	printf("Initializing peripherals ...\n");
+	i2c_master_init();
     gpio_led_init();
 
     // Initialize TTN, do provisioning
@@ -105,14 +145,28 @@ extern "C" void app_main()
     printf("Joining TTN ...\n");
     if (ttn.join())
     {
-        printf("Starting lorawan senter thread! ...\n");
+        printf("Sending lorawan message ...\n");
         // Start the lorawan sender
-        xTaskCreate(ttn_send_thread, "ttn_send_thread", 1024 * 4, (void* )0, 3, NULL);
+        // xTaskCreate(ttn_send_thread, "ttn_send_thread", 1024 * 4, (void* )0, 3, NULL);
+		ttn_send_data();
     }else
     {
-        printf("Join failed!!\n");
+        printf("Join failed!! No data sent!\n");
     }
 
+    printf("Waiting for 10 seconds for Rx packets ... \n");
+    vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
+
+    printf("Deep sleep set for %d seconds ... \n", CONFIG_WAKEUP_INTERVAL);
+    const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
+    printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
+    esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
+
+    printf("Entering deep sleep\n");
+    gettimeofday(&sleep_enter_time, NULL);
+
+    // Deep sleep
+    esp_deep_sleep_start();
 }
 
 void ttn_send_thread(void* pvParameter)
@@ -124,10 +178,19 @@ void ttn_send_thread(void* pvParameter)
         send_ttn_message();
 
         gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
-        printf("Sleep (%d) seconds ... \n", CONFIG_WAKEUP_INTERVAL);
-        vTaskDelay(CONFIG_WAKEUP_INTERVAL * 1000 / portTICK_PERIOD_MS);
     }
 }
+
+static void ttn_send_data()
+{
+ 	/* Set LED on (output low) */
+	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
+
+	send_ttn_message();
+
+	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
+}
+
 
 
 /**
