@@ -1,3 +1,0 @@
-[submodule "components/ttn-esp32"]
-	path = components/ttn-esp32
-	url = https://github.com/manuelbl/ttn-esp32.git

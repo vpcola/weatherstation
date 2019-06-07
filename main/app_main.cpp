@@ -82,6 +82,8 @@ const char *appKey = CONFIG_TTN_APP_KEY;
 static TheThingsNetwork ttn;
 static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 
+// Variables stored on slow memory, they're retained
+// from deep sleep to deep sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
 /*************************
@@ -142,17 +144,17 @@ extern "C" void app_main()
     }
 
 
-    printf("Joining TTN ...\n");
-    if (ttn.join())
-    {
-        printf("Sending lorawan message ...\n");
-        // Start the lorawan sender
-        // xTaskCreate(ttn_send_thread, "ttn_send_thread", 1024 * 4, (void* )0, 3, NULL);
+	printf("Joining TTN ...\n");
+	// Join TTN
+	if (ttn.join())
+	{
+		printf("Joined TTN, sending data ...\n");
 		ttn_send_data();
-    }else
-    {
-        printf("Join failed!! No data sent!\n");
-    }
+	}else
+	{
+		printf("TTN join failed!\n");
+	}
+
 
     printf("Waiting for 10 seconds for Rx packets ... \n");
     vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
