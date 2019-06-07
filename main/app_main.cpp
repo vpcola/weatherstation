@@ -85,6 +85,7 @@ static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 // Variables stored on slow memory, they're retained
 // from deep sleep to deep sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
+static RTC_DATA_ATTR int boot_count = 0;
 
 /*************************
  * Static Functions      *
@@ -94,8 +95,7 @@ static RTC_DATA_ATTR struct timeval sleep_enter_time;
 static void ttn_send_data(void);
 static esp_err_t i2c_master_init(void);
 static void gpio_led_init(void);
-static int32_t get_restart_counter(uint32_t);
-static void lora_module_init(bool);
+static void lora_module_init();
 
 /**************************
  * Forward declarations   *
@@ -111,12 +111,18 @@ void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
  **************************/
 extern "C" void app_main()
 {
-    int restart_counter = get_restart_counter( -1 );
-    bool do_provision = (restart_counter <= 0);
+	struct timeval now;
 
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+	printf("Boot Count = %d, Initializing peripherals ...\n", boot_count);
+	// Initialize TTN, do provisioning
+	lora_module_init();
+
+	i2c_master_init();
+	gpio_led_init();
+
+	
+	gettimeofday(&now, NULL);
+	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
 
 	switch (esp_sleep_get_wakeup_cause())
 	{
@@ -130,45 +136,38 @@ extern "C" void app_main()
 										 break;
 									 }
 	}
-	printf("Initializing peripherals ...\n");
-	i2c_master_init();
-    gpio_led_init();
 
-    // Initialize TTN, do provisioning
-    // if restart_counter is zero (or invalid = -1)
-    lora_module_init(do_provision);
-
-    if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
-    {
-        printf("Failed to initialize HDC1080 sensor!\n");
-    }
-
+	if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
+	{
+		printf("Failed to initialize HDC1080 sensor!\n");
+	}
 
 	printf("Joining TTN ...\n");
 	// Join TTN
 	if (ttn.join())
 	{
-		printf("Joined TTN, sending data ...\n");
+		printf("Join accepted!\n");
+		printf("Sending data to TTN!\n");
 		ttn_send_data();
 	}else
 	{
-		printf("TTN join failed!\n");
+		printf("Join failed!\n");
 	}
+	++boot_count;
 
+	printf("Waiting for 10 seconds for Rx packets ... \n");
+	vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
 
-    printf("Waiting for 10 seconds for Rx packets ... \n");
-    vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
+	printf("Deep sleep set for %d seconds ... \n", CONFIG_WAKEUP_INTERVAL);
+	const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
+	printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
+	esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
 
-    printf("Deep sleep set for %d seconds ... \n", CONFIG_WAKEUP_INTERVAL);
-    const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
-    printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
-    esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
+	printf("Entering deep sleep\n");
+	gettimeofday(&sleep_enter_time, NULL);
 
-    printf("Entering deep sleep\n");
-    gettimeofday(&sleep_enter_time, NULL);
-
-    // Deep sleep
-    esp_deep_sleep_start();
+	// Deep sleep
+	esp_deep_sleep_start();
 }
 
 void ttn_send_thread(void* pvParameter)
@@ -221,68 +220,7 @@ static void gpio_led_init()
     gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_OUTPUT);
 }
 
-static int32_t get_restart_counter(uint32_t initval)
-{
-    int32_t restart_counter = initval;
-    esp_err_t err;
-
-    // Initialize the NVS (non-volatile storage) for saving and restoring the keys
-    err = nvs_flash_init();
-    ESP_ERROR_CHECK(err);
-
-    nvs_handle my_handle;
-    printf("Opening Non-Volatile Storage (NVS) handle ...");
-    err = nvs_open("storage", NVS_READWRITE, &my_handle);
-    if (err != ESP_OK)
-    {
-        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-        return -1;
-    }
-    else
-    {
-        printf("Done!\n");
-
-        // Read 
-        printf("Reading restart counter from NVS ...");
-        err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
-        switch(err)
-        {
-            case ESP_OK:
-                printf("Done\n");
-                printf("Restart counter = %d\n", restart_counter);
-                break;
-            case ESP_ERR_NVS_NOT_FOUND:
-                printf("The value is not initialized yet!\n");
-                break;
-            default:
-                printf("Error (%s) reading!\n", esp_err_to_name(err));
-        }
-
-        // Write
-        printf("Updating restart counter in NVS ...");
-        restart_counter ++;
-        err = nvs_set_i32(my_handle, "restart_counter", restart_counter);
-        printf((err != ESP_OK) ? "Failed!\n" : "Done!\n");
-
-        // Commit written value.
-        // After setting any values, nvs_commit() must be called to ensure changes
-        // are written to flash storage. Implementations may write to storage at other times.
-        // but this is not guaranteed.
-        printf("Committing updates in NVS ... ");
-        err = nvs_commit(my_handle);
-        printf((err != ESP_OK) ? "Failed!\n" : "Done!\n");
-
-        // Close
-        nvs_close(my_handle);
-
-    }
-    // Return the value of the restart counter
-    return restart_counter;
-
-
-}
-
-static void lora_module_init(bool do_provision)
+static void lora_module_init()
 {
     esp_err_t err;
     // Initialize the GPIO ISR handler service
@@ -303,12 +241,17 @@ static void lora_module_init(bool do_provision)
     // Configure the SX127x pins
     ttn.configurePins(TTN_SPI_HOST, TTN_PIN_NSS, TTN_PIN_RXTX, TTN_PIN_RST, TTN_PIN_DIO0, TTN_PIN_DIO1);
 
-    if (do_provision)
-    {
-        // Only do provision if we are starting for the first time.
-        printf("Starting TTN provisioning!\n");
-        ttn.provision(devEui, appEui, appKey);
-    }
+
+	// Initialize the NVS (non-volatile storage) for saving and restoring the keys
+	err = nvs_flash_init();
+	ESP_ERROR_CHECK(err);
+
+
+	if (boot_count == 0)
+	{
+		printf("Starting TTN provisioning!\n");
+		ttn.provision(devEui, appEui, appKey);
+	}
 
     ttn.onMessage(receive_ttn_message);
 }
