@@ -1,0 +1,3 @@
+[submodule "components/ttn-esp32"]
+	path = components/ttn-esp32
+	url = https://github.com/vpcola/ttn-esp32.git
