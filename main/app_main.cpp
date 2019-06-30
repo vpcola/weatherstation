@@ -120,6 +120,10 @@ extern "C" void app_main()
 	i2c_master_init();
 	gpio_led_init();
 
+	/* Set LED on (output low) */
+	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
+
+
 	
 	gettimeofday(&now, NULL);
 	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -148,7 +152,7 @@ extern "C" void app_main()
 	{
 		printf("Join accepted!\n");
 		printf("Sending data to TTN!\n");
-		ttn_send_data();
+		send_ttn_message();
 	}else
 	{
 		printf("Join failed!\n");
@@ -166,6 +170,12 @@ extern "C" void app_main()
 	printf("Entering deep sleep\n");
 	gettimeofday(&sleep_enter_time, NULL);
 
+	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
+	// Disable the pull up resistor on the CONFIG_WAKEUP_LED
+	gpio_set_pull_mode((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_FLOATING);
+	gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_INPUT); 
+	//gpio_deep_sleep_hold_en();
+
 	// Deep sleep
 	esp_deep_sleep_start();
 }
@@ -180,16 +190,6 @@ void ttn_send_thread(void* pvParameter)
 
         gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
     }
-}
-
-static void ttn_send_data()
-{
- 	/* Set LED on (output low) */
-	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
-
-	send_ttn_message();
-
-	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
 }
 
 
