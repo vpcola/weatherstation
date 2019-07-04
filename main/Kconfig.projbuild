@@ -27,6 +27,22 @@ config I2C_MASTER_FREQUENCY
         I2C Speed of Master device.
 endmenu
 
+menu "GPS UART"
+config GPS_UART_PORT
+    int "UART_PORT"
+    default 2
+    help
+        The UART port to use. 0 - UART0, 1 - UART1, 2 - UART2
+
+config GPS_UART_RX_PIN
+    int "UART_PIN"
+    default 21
+    range 0 34
+    help
+        The RX GPIO pin to use.
+
+endmenu
+
 menu "RFM95W Lora Module"
 
 config RFM95W_SCLK

@@ -27,6 +27,7 @@
 #include "soc/rtc_cntl_reg.h"
 #include "soc/sens_reg.h"
 #include "soc/rtc.h"
+#include "nmea_parser.h"
 #include "hdc1080.h"
 #include "TheThingsNetwork.h"
 #include "CayenneLPP.h"
@@ -35,6 +36,8 @@
 #define _I2C_NUMBER(num) I2C_NUM_##num
 #define I2C_NUMBER(num) _I2C_NUMBER(num)
 
+#define TIME_ZONE (+8)   //Singapore Time
+#define YEAR_BASE (2000) //date in GPS starts from 2000
 
 #define I2C_MASTER_SCL_IO CONFIG_I2C_MASTER_SCL               /*!< gpio number for I2C master clock */
 #define I2C_MASTER_SDA_IO CONFIG_I2C_MASTER_SDA               /*!< gpio number for I2C master data  */
@@ -79,6 +82,8 @@ const char *devEui = CONFIG_TTN_DEV_EUI;
 const char *appEui = CONFIG_TTN_APP_EUI;
 const char *appKey = CONFIG_TTN_APP_KEY;
 
+static const char *TAG = "lorawan_demo";
+
 static TheThingsNetwork ttn;
 static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 
@@ -92,16 +97,16 @@ static RTC_DATA_ATTR int boot_count = 0;
  *                       *
  *************************/
 
-static void ttn_send_data(void);
 static esp_err_t i2c_master_init(void);
 static void gpio_led_init(void);
-static void lora_module_init();
+static void lora_module_init(void);
+static void gps_init(void);
+static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
 
 /**************************
  * Forward declarations   *
  *                        *
  **************************/
-void ttn_send_thread(void* pvParameter);
 void send_ttn_message(void);
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
 
@@ -119,6 +124,7 @@ extern "C" void app_main()
 
 	i2c_master_init();
 	gpio_led_init();
+    gps_init();
 
 	/* Set LED on (output low) */
 	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
@@ -179,20 +185,6 @@ extern "C" void app_main()
 	// Deep sleep
 	esp_deep_sleep_start();
 }
-
-void ttn_send_thread(void* pvParameter)
-{
-    while (1) {
-        /* Set LED on (output low) */
-        gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
-
-        send_ttn_message();
-
-        gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
-    }
-}
-
-
 
 /**
 * @brief i2c master initialization
@@ -255,6 +247,53 @@ static void lora_module_init()
 
     ttn.onMessage(receive_ttn_message);
 }
+
+static void gps_init()
+{
+	/* NMEA parser configuration */
+	nmea_parser_config_t config = NMEA_PARSER_CONFIG_DEFAULT();
+    /* Set UART and the RX pin */
+    config.uart.uart_port = (uart_port_t) CONFIG_GPS_UART_PORT;
+    config.uart.rx_pin = CONFIG_GPS_UART_RX_PIN;
+	/* init NMEA parser library */
+	nmea_parser_handle_t nmea_hdl = nmea_parser_init(&config);
+	/* register event handler for NMEA parser library */
+	nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
+}
+
+/**
+* @brief GPS Event Handler
+*
+* @param event_handler_arg handler specific arguments
+* @param event_base event base, here is fixed to ESP_NMEA_EVENT
+* @param event_id event id
+* @param event_data event specific arguments
+*/
+static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+   gps_t *gps = NULL;
+   switch (event_id) {
+   case GPS_UPDATE:
+       gps = (gps_t *)event_data;
+       /* print information parsed from GPS statements */
+       ESP_LOGI(TAG, "%d/%d/%d %d:%d:%d => \r\n"
+		"\t\t\t\t\t\tlatitude   = %.05f°N\r\n"
+		"\t\t\t\t\t\tlongtitude = %.05f°E\r\n"
+		"\t\t\t\t\t\taltitude   = %.02fm\r\n"
+		"\t\t\t\t\t\tspeed      = %fm/s",
+		gps->date.year + YEAR_BASE, gps->date.month, gps->date.day,
+		gps->tim.hour + TIME_ZONE, gps->tim.minute, gps->tim.second,
+		gps->latitude, gps->longitude, gps->altitude, gps->speed);
+       break;
+   case GPS_UNKNOWN:
+       /* print unknown statements */
+       ESP_LOGW(TAG, "Unknown statement:%s", (char *)event_data);
+       break;
+   default:
+       break;
+   }
+}
+
 
 void send_ttn_message()
 {
