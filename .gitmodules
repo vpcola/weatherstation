@@ -1,3 +1,6 @@
 [submodule "components/ttn-esp32"]
 	path = components/ttn-esp32
 	url = https://github.com/vpcola/ttn-esp32.git
+[submodule "components/plantower5003"]
+	path = components/plantower5003
+	url = https://github.com/vpcola/plantower5003.git
