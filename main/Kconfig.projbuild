@@ -30,10 +30,10 @@ endmenu
 menu "GPS UART"
 
 choice GPS_UART_PORT
-    prompt "Select the UART Port for GPS"  
+    prompt "UART Port for GPS"  
     default GPS_UART_PORT_2
     help
-        The UART port to use. 
+        UART1 and UART2 are available, UART0 is used for debugging.
 
     config GPS_UART_PORT_2
         bool "UART2"
@@ -50,10 +50,10 @@ config GPS_UART_RX_PIN
         The RX GPIO pin to use.
 endmenu
 
-menu "Plantower Dust Sensor Configuration"
+menu "Plantower PMS5003"
 
 choice DUSTSENSOR_UART_PORT
-    prompt "Select the UART Port for Plantower Dust Sensor"
+    prompt "UART Port for Plantower PMS5003"
     default DUSTSENSOR_PORT_UART_1
     help
         UART1 and UART2 are available, UART0 is used for debugging.
