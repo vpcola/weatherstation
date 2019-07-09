@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp32/ulp.h"
@@ -77,6 +78,7 @@
 #error Please select the UART Port used by the GPS receiver!
 #endif
 
+#define MAIN_TASK_PRIO  10
 
 // NOTE:
 // Lorawan specification defines the maximum payload (num. of bytes)
@@ -84,6 +86,23 @@
 // to 51 bytes.
 #define MAX_LORA_PAYLOAD 51
 
+typedef enum
+{
+    EV_GPS_UPDATE,
+    EV_DUST_DATA_UPDATE,
+    EV_LORA_MSG_RECV,
+    EV_TEMP_HUMIDITY_UPDATE,
+} main_task_event_t;
+
+typedef struct 
+{
+    main_task_event_t event;
+    union {
+        gps_t gps_data;
+        dustsensor_t dust_data;
+        unsigned char lora_data[58];
+    } data;
+} main_task_message_t;
 
 /*************************
  * Static Variables      *
@@ -110,20 +129,35 @@ static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 // from deep sleep to deep sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 static RTC_DATA_ATTR int boot_count = 0;
+static nmea_parser_handle_t nmea_hdl;
+static dustsensor_parser_handle_t dustsensor_hdl;
+static QueueHandle_t main_task_queue;
+static SemaphoreHandle_t shutdown_sem;
 
 /*************************
  * Static Functions      *
  *                       *
  *************************/
 
-static esp_err_t i2c_master_init(void);
+static void i2c_master_init(void);
+static void i2c_master_deinit(void);
+
 static void gpio_led_init(void);
+static void gpio_led_deinit(void);
+
 static void lora_module_init(void);
+static void lora_module_deinit(void);
+
 static void gps_init(void);
+static void gps_deinit(void);
+
 static void dustsensor_init(void);
+static void dustsensor_deinit(void);
+
 static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
 static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void
 *event_data);
+static void main_task(void * arg);
 
 /**************************
  * Forward declarations   *
@@ -176,44 +210,54 @@ extern "C" void app_main()
 		ESP_LOGE(TAG, "Failed to initialize HDC1080 sensor!\r\n");
 	}
 
-	ESP_LOGI(TAG,"Joining TTN ...\r\n");
-	// Join TTN
-	if (ttn.join())
-	{
-		ESP_LOGI(TAG, "Join accepted!\r\n");
-		printf("Sending data to TTN!\n");
-		send_ttn_message();
-	}else
-	{
-		ESP_LOGE(TAG, "Join failed!\r\n");
-	}
+    ESP_LOGI(TAG, "Creating main message queue\r\n");
+    /* Create the main task message queue */
+    main_task_queue = xQueueCreate(10, sizeof(struct main_task_queue_t *));
+    if ( main_task_queue == 0)
+    {
+        ESP_LOGE(TAG, "Failed in creating main task queue!");
+    }
+    
+    /* Create the shutdown semaphore */
+    shutdown_sem = xSemaphoreCreateBinary();
+
+    /* Create the main task */
+    xTaskCreate(main_task, "main_task", 4096, NULL, MAIN_TASK_PRIO, NULL);
+
+    /* Wait for the shutdown_sem to be signalled */
+    xSemaphoreTake(shutdown_sem, portMAX_DELAY);
+    ESP_LOGI(TAG, "Shutdown initiated ....\r\n");
 	++boot_count;
 
-	printf("Waiting for 10 seconds for Rx packets ... \n");
-	vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
+    /* Task Cleanup */
+    vQueueDelete(main_task_queue);
+    vSemaphoreDelete(shutdown_sem);
 
+    /* Deep Sleep Wakeup Setup */
 	ESP_LOGI(TAG, "Deep sleep set for %d seconds ... \r\n", CONFIG_WAKEUP_INTERVAL);
 	const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
 	ESP_LOGI(TAG, "Enabling timer wakeup, %ds\r\n", wakeup_time_sec);
 	esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
 
-	ESP_LOGI(TAG, "Entering deep sleep\r\n");
-	gettimeofday(&sleep_enter_time, NULL);
+    /* Driver de-init */
+    gps_deinit();
+    dustsensor_deinit();
 
-	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
-	// Disable the pull up resistor on the CONFIG_WAKEUP_LED
-	gpio_set_pull_mode((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_FLOATING);
-	gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_INPUT); 
-	//gpio_deep_sleep_hold_en();
+    /* De-init GPIO Led */
+    gpio_led_deinit();
+    i2c_master_deinit();
+    lora_module_deinit();
 
-	// Deep sleep
+    /* Deep Sleep */
+    ESP_LOGI(TAG, "Entering deep sleep\r\n");
+    gettimeofday(&sleep_enter_time, NULL);
 	esp_deep_sleep_start();
 }
 
 /**
 * @brief i2c master initialization
 */
-static esp_err_t i2c_master_init()
+static void i2c_master_init()
 {
    i2c_port_t i2c_master_port = I2C_MASTER_NUM;
    i2c_config_t conf;
@@ -224,19 +268,36 @@ static esp_err_t i2c_master_init()
    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
    conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
    i2c_param_config( i2c_master_port, &conf);
-   return i2c_driver_install(i2c_master_port, conf.mode,
+   if ( i2c_driver_install(i2c_master_port, conf.mode,
                              I2C_MASTER_RX_BUF_DISABLE,
-                             I2C_MASTER_TX_BUF_DISABLE, 0);
+                             I2C_MASTER_TX_BUF_DISABLE, 0) != ESP_OK)
+   {
+       ESP_LOGE(TAG, "Failed to initialize I2C driver!\r\n");
+   }
 }
 
-static void gpio_led_init()
+static void i2c_master_deinit(void)
+{
+    if (i2c_driver_delete(I2C_MASTER_NUM) != ESP_OK)
+        ESP_LOGE(TAG, "Failed to uninstall I2C driver!\r\n");
+}
+
+
+static void gpio_led_init(void)
 {
     gpio_pad_select_gpio((gpio_num_t) CONFIG_WAKEUP_LED);
     /* Set the GPIO as a push/pull output */
     gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_OUTPUT);
 }
 
-static void lora_module_init()
+static void gpio_led_deinit(void)
+{
+    gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
+    gpio_set_pull_mode((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_FLOATING);
+    gpio_set_direction((gpio_num_t) CONFIG_WAKEUP_LED, GPIO_MODE_INPUT); 
+}
+
+static void lora_module_init(void)
 {
     esp_err_t err;
     // Initialize the GPIO ISR handler service
@@ -272,7 +333,12 @@ static void lora_module_init()
     ttn.onMessage(receive_ttn_message);
 }
 
-static void gps_init()
+static void lora_module_deinit(void)
+{
+    /* TODO: un initialize SPI */
+}
+
+static void gps_init(void)
 {
 	/* NMEA parser configuration */
 	nmea_parser_config_t config = NMEA_PARSER_CONFIG_DEFAULT();
@@ -280,21 +346,33 @@ static void gps_init()
     config.uart.uart_port = (uart_port_t) GPS_UART_PORT;
     config.uart.rx_pin = CONFIG_GPS_UART_RX_PIN;
 	/* init NMEA parser library */
-	nmea_parser_handle_t nmea_hdl = nmea_parser_init(&config);
+	nmea_hdl = nmea_parser_init(&config);
 	/* register event handler for NMEA parser library */
 	nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
 }
 
-static void dustsensor_init()
+static void gps_deinit(void)
+{
+    if ( nmea_parser_deinit(nmea_hdl) != ESP_OK)
+        ESP_LOGE(TAG, "GPS de-initialization error!\r\n");
+}
+
+static void dustsensor_init(void)
 {
     /* NMEA parser configuration */
     dustsensor_parser_config_t config = DUSTSENSOR_PARSER_CONFIG_DEFAULT();
     config.uart.uart_port = (uart_port_t) DUSTSENSOR_UART_PORT;
     config.uart.rx_pin = CONFIG_DUSTSENSOR_UART_RX_PIN;
     /* init NMEA parser library */
-    dustsensor_parser_handle_t dustsensor_hdl = dustsensor_parser_init(&config);
+    dustsensor_hdl = dustsensor_parser_init(&config);
     /* register event handler for NMEA parser library */
     dustsensor_parser_add_handler(dustsensor_hdl, dustsensor_event_handler, NULL);
+}
+
+static void dustsensor_deinit(void)
+{
+   if (dustsensor_parser_deinit( dustsensor_hdl ) != ESP_OK)
+       ESP_LOGE(TAG, "Dustsensor de-initialization error!\r\n");
 }
 
 /**
@@ -358,6 +436,46 @@ static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t e
     }
 }
 
+static void main_task(void * arg)
+{
+    main_task_message_t * msg;
+	ESP_LOGI(TAG,"Joining TTN ...\r\n");
+
+    if (ttn.join())
+    {
+        ESP_LOGI(TAG, "Join accepted, main event loop started!\r\n");
+        while(1)
+        {
+            xQueueReceive(main_task_queue, &( msg ), portMAX_DELAY);
+
+            switch(msg->event)
+            {
+                case EV_GPS_UPDATE:
+                    break;
+                case EV_DUST_DATA_UPDATE:
+                    break;
+                case EV_LORA_MSG_RECV:
+                    break;
+                case EV_TEMP_HUMIDITY_UPDATE:
+                    break;
+                default:
+                    ESP_LOGE(TAG, "Unknown event type!\r\n");
+            }
+
+            /* TODO: Determine if we need to shutdown! */
+            send_ttn_message();
+            break;
+        }
+    }else
+    {
+        ESP_LOGE(TAG, "Failed to join TTN, restarting!\r\n");
+    }
+
+    /* Done with main task, resume shutdown */
+    xSemaphoreGive(shutdown_sem);
+    /* Remove this task */
+    vTaskDelete(NULL);
+}
 
 void send_ttn_message()
 {
