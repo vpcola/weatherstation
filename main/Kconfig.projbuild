@@ -69,7 +69,7 @@ endchoice
 config DUSTSENSOR_UART_RX_PIN 
     int "UART GPIO number"
     range 0 34
-    default 2 
+    default 4 
     help
         GPIO number for the UART RX pin.
 
