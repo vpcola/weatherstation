@@ -28,6 +28,7 @@
 #include "soc/sens_reg.h"
 #include "soc/rtc.h"
 #include "nmea_parser.h"
+#include "dustsensor_parser.h"
 #include "hdc1080.h"
 #include "TheThingsNetwork.h"
 #include "CayenneLPP.h"
@@ -59,6 +60,24 @@
 #define TTN_PIN_DIO0      CONFIG_RFM95W_DIO0
 #define TTN_PIN_DIO1      CONFIG_RFM95W_DIO1
 
+
+#if defined(CONFIG_DUSTSENSOR_UART_PORT_1)
+#define DUSTSENSOR_UART_PORT UART_NUM_1
+#elif defined(CONFIG_DUSTSENSOR_UART_PORT_2)
+#define DUSTSENSOR_UART_PORT UART_NUM_2
+#else
+#error Please select the UART Port used by the dust sensor!
+#endif
+
+#if defined(CONFIG_GPS_UART_PORT_1)
+#define GPS_UART_PORT UART_NUM_1
+#elif defined(CONFIG_GPS_UART_PORT_2)
+#define GPS_UART_PORT UART_NUM_2
+#else
+#error Please select the UART Port used by the GPS receiver!
+#endif
+
+
 // NOTE:
 // Lorawan specification defines the maximum payload (num. of bytes)
 // to send depending on effecitive modulation rate. At SF12, this translates
@@ -82,7 +101,7 @@ const char *devEui = CONFIG_TTN_DEV_EUI;
 const char *appEui = CONFIG_TTN_APP_EUI;
 const char *appKey = CONFIG_TTN_APP_KEY;
 
-static const char *TAG = "lorawan_demo";
+static const char *TAG = "MAIN";
 
 static TheThingsNetwork ttn;
 static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
@@ -101,7 +120,10 @@ static esp_err_t i2c_master_init(void);
 static void gpio_led_init(void);
 static void lora_module_init(void);
 static void gps_init(void);
+static void dustsensor_init(void);
 static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
+static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void
+*event_data);
 
 /**************************
  * Forward declarations   *
@@ -118,13 +140,15 @@ extern "C" void app_main()
 {
 	struct timeval now;
 
-	printf("Boot Count = %d, Initializing peripherals ...\n", boot_count);
+	ESP_LOGI(TAG, "Boot Count = %d, Initializing peripherals ...\r\n", boot_count);
 	// Initialize TTN, do provisioning
 	lora_module_init();
 
 	i2c_master_init();
 	gpio_led_init();
+
     gps_init();
+    dustsensor_init();
 
 	/* Set LED on (output low) */
 	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
@@ -137,43 +161,43 @@ extern "C" void app_main()
 	switch (esp_sleep_get_wakeup_cause())
 	{
 		case ESP_SLEEP_WAKEUP_TIMER: {
-										 printf("Wake up from timer. Time spent in deep sleep: %dms\n", sleep_time_ms);
+										 ESP_LOGI(TAG,"Wake up from timer. Time spent in deep sleep: %d ms\r\n", sleep_time_ms);
 										 break;
 									 }
 		default:
 									 {
-										 printf("Wake up from other sources ....\n");
+										 ESP_LOGI(TAG,"Wake up from other sources ....\r\n");
 										 break;
 									 }
 	}
 
 	if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
 	{
-		printf("Failed to initialize HDC1080 sensor!\n");
+		ESP_LOGE(TAG, "Failed to initialize HDC1080 sensor!\r\n");
 	}
 
-	printf("Joining TTN ...\n");
+	ESP_LOGI(TAG,"Joining TTN ...\r\n");
 	// Join TTN
 	if (ttn.join())
 	{
-		printf("Join accepted!\n");
+		ESP_LOGI(TAG, "Join accepted!\r\n");
 		printf("Sending data to TTN!\n");
 		send_ttn_message();
 	}else
 	{
-		printf("Join failed!\n");
+		ESP_LOGE(TAG, "Join failed!\r\n");
 	}
 	++boot_count;
 
 	printf("Waiting for 10 seconds for Rx packets ... \n");
 	vTaskDelay( 10 * 1000 / portTICK_PERIOD_MS);
 
-	printf("Deep sleep set for %d seconds ... \n", CONFIG_WAKEUP_INTERVAL);
+	ESP_LOGI(TAG, "Deep sleep set for %d seconds ... \r\n", CONFIG_WAKEUP_INTERVAL);
 	const int wakeup_time_sec = CONFIG_WAKEUP_INTERVAL;
-	printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
+	ESP_LOGI(TAG, "Enabling timer wakeup, %ds\r\n", wakeup_time_sec);
 	esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
 
-	printf("Entering deep sleep\n");
+	ESP_LOGI(TAG, "Entering deep sleep\r\n");
 	gettimeofday(&sleep_enter_time, NULL);
 
 	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 0);
@@ -241,7 +265,7 @@ static void lora_module_init()
 
 	if (boot_count == 0)
 	{
-		printf("Starting TTN provisioning!\n");
+		ESP_LOGI(TAG, "Starting TTN provisioning!\r\n");
 		ttn.provision(devEui, appEui, appKey);
 	}
 
@@ -253,12 +277,24 @@ static void gps_init()
 	/* NMEA parser configuration */
 	nmea_parser_config_t config = NMEA_PARSER_CONFIG_DEFAULT();
     /* Set UART and the RX pin */
-    config.uart.uart_port = (uart_port_t) CONFIG_GPS_UART_PORT;
+    config.uart.uart_port = (uart_port_t) GPS_UART_PORT;
     config.uart.rx_pin = CONFIG_GPS_UART_RX_PIN;
 	/* init NMEA parser library */
 	nmea_parser_handle_t nmea_hdl = nmea_parser_init(&config);
 	/* register event handler for NMEA parser library */
 	nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
+}
+
+static void dustsensor_init()
+{
+    /* NMEA parser configuration */
+    dustsensor_parser_config_t config = DUSTSENSOR_PARSER_CONFIG_DEFAULT();
+    config.uart.uart_port = (uart_port_t) DUSTSENSOR_UART_PORT;
+    config.uart.rx_pin = CONFIG_DUSTSENSOR_UART_RX_PIN;
+    /* init NMEA parser library */
+    dustsensor_parser_handle_t dustsensor_hdl = dustsensor_parser_init(&config);
+    /* register event handler for NMEA parser library */
+    dustsensor_parser_add_handler(dustsensor_hdl, dustsensor_event_handler, NULL);
 }
 
 /**
@@ -277,10 +313,10 @@ static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_ba
        gps = (gps_t *)event_data;
        /* print information parsed from GPS statements */
        ESP_LOGI(TAG, "%d/%d/%d %d:%d:%d => \r\n"
-		"\t\t\t\t\t\tlatitude   = %.05f°N\r\n"
-		"\t\t\t\t\t\tlongtitude = %.05f°E\r\n"
-		"\t\t\t\t\t\taltitude   = %.02fm\r\n"
-		"\t\t\t\t\t\tspeed      = %fm/s",
+		"\tlatitude   = %.05f°N\r\n"
+		"\tlongtitude = %.05f°E\r\n"
+		"\taltitude   = %.02fm\r\n"
+		"\tspeed      = %fm/s",
 		gps->date.year + YEAR_BASE, gps->date.month, gps->date.day,
 		gps->tim.hour + TIME_ZONE, gps->tim.minute, gps->tim.second,
 		gps->latitude, gps->longitude, gps->altitude, gps->speed);
@@ -292,6 +328,34 @@ static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_ba
    default:
        break;
    }
+}
+
+static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    dustsensor_t *sensor = NULL;
+    switch (event_id) {
+    case SENSOR_UPDATE:
+        sensor = (dustsensor_t *)event_data;
+        // Handle the data from the sensor here
+        ESP_LOGI(TAG, "Concentration Unit (Standard):\r\n"
+                "\tPM1.0 = %d ug/cum, PM2.5 = %d ug/cum, PM10 = %d ug/cum\r\n", 
+                sensor->pm1,
+                sensor->pm25,
+                sensor->pm10);
+        ESP_LOGI(TAG, "Concentration Unit (Environmental):\r\n"
+                "\tPM1.0 = %d ug/cum, PM2.5 = %d ug/cum, PM10 = %d ug/cum\r\n", 
+                sensor->pm1_atmospheric,
+                sensor->pm25_atmospheric,
+                sensor->pm10_atmospheric);
+
+        break;
+    case SENSOR_UNKNOWN:
+        /* print unknown statements */
+        ESP_LOGE(TAG, "Unknown statement:%s", (char *)event_data);
+        break;
+    default:
+        break;
+    }
 }
 
 
@@ -325,7 +389,7 @@ void send_ttn_message()
 
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port)
 {
-    printf("Message of %d bytes received on port %d:", length, port);
+    ESP_LOGI(TAG, "Message of %d bytes received on port %d\r\n", length, port);
     for (int i = 0; i < length; i++)
         printf(" %02x", message[i]);
     printf("\n");
