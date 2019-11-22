@@ -54,7 +54,7 @@ menu "Plantower PMS5003"
 
 choice DUSTSENSOR_UART_PORT
     prompt "UART Port for Plantower PMS5003"
-    default DUSTSENSOR_PORT_UART_1
+    default DUSTSENSOR_UART_PORT_1
     help
         UART1 and UART2 are available, UART0 is used for debugging.
 
