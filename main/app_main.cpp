@@ -324,7 +324,7 @@ static void lora_module_init(void)
 	ESP_ERROR_CHECK(err);
 
 
-	if (boot_count == 0)
+	if (!ttn.isProvisioned())
 	{
 		ESP_LOGI(TAG, "Starting TTN provisioning!\r\n");
 		ttn.provision(devEui, appEui, appKey);
