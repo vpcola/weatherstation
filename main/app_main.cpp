@@ -28,7 +28,7 @@
 #include "soc/rtc_cntl_reg.h"
 #include "soc/sens_reg.h"
 #include "soc/rtc.h"
-#include "nmea_parser.h"
+
 #include "dustsensor_parser.h"
 #include "hdc1080.h"
 #include "TheThingsNetwork.h"
@@ -39,7 +39,6 @@
 #define I2C_NUMBER(num) _I2C_NUMBER(num)
 
 #define TIME_ZONE (+8)   //Singapore Time
-#define YEAR_BASE (2000) //date in GPS starts from 2000
 
 #define I2C_MASTER_SCL_IO CONFIG_I2C_MASTER_SCL               /*!< gpio number for I2C master clock */
 #define I2C_MASTER_SDA_IO CONFIG_I2C_MASTER_SDA               /*!< gpio number for I2C master data  */
@@ -70,14 +69,6 @@
 #error Please select the UART Port used by the dust sensor!
 #endif
 
-#if defined(CONFIG_GPS_UART_PORT_1)
-#define GPS_UART_PORT UART_NUM_1
-#elif defined(CONFIG_GPS_UART_PORT_2)
-#define GPS_UART_PORT UART_NUM_2
-#else
-#error Please select the UART Port used by the GPS receiver!
-#endif
-
 #define MAIN_TASK_PRIO  10
 
 // NOTE:
@@ -88,17 +79,14 @@
 
 typedef enum
 {
-    EV_GPS_UPDATE,
     EV_DUST_DATA_UPDATE,
-    EV_LORA_MSG_RECV,
-    EV_TEMP_HUMIDITY_UPDATE,
+    EV_LORA_MSG_RECV
 } main_task_event_t;
 
 typedef struct 
 {
     main_task_event_t event;
     union {
-        gps_t gps_data;
         dustsensor_t dust_data;
         unsigned char lora_data[58];
     } data;
@@ -129,7 +117,7 @@ static CayenneLPP       lpp(MAX_LORA_PAYLOAD);
 // from deep sleep to deep sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 static RTC_DATA_ATTR int boot_count = 0;
-static nmea_parser_handle_t nmea_hdl;
+
 static dustsensor_parser_handle_t dustsensor_hdl;
 static QueueHandle_t main_task_queue;
 static SemaphoreHandle_t shutdown_sem;
@@ -148,13 +136,9 @@ static void gpio_led_deinit(void);
 static void lora_module_init(void);
 static void lora_module_deinit(void);
 
-static void gps_init(void);
-static void gps_deinit(void);
-
 static void dustsensor_init(void);
 static void dustsensor_deinit(void);
 
-static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
 static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void
 *event_data);
 static void main_task(void * arg);
@@ -175,18 +159,20 @@ extern "C" void app_main()
 	struct timeval now;
 
 	ESP_LOGI(TAG, "Boot Count = %d, Initializing peripherals ...\r\n", boot_count);
-	// Initialize TTN, do provisioning
+	// Initialize radio module, do provisioning if necessary
 	lora_module_init();
 
 	i2c_master_init();
-	gpio_led_init();
+	if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to initialize HDC1080 sensor!\r\n");
+    }
+    gpio_led_init();
 
-    gps_init();
     dustsensor_init();
 
 	/* Set LED on (output low) */
 	gpio_set_level((gpio_num_t) CONFIG_WAKEUP_LED, 1);
-
 
 	
 	gettimeofday(&now, NULL);
@@ -205,10 +191,6 @@ extern "C" void app_main()
 									 }
 	}
 
-	if ( hdc1080_init(I2C_MASTER_NUM) != ESP_OK)
-	{
-		ESP_LOGE(TAG, "Failed to initialize HDC1080 sensor!\r\n");
-	}
 
     ESP_LOGI(TAG, "Creating main message queue\r\n");
     /* Create the main task message queue */
@@ -240,13 +222,10 @@ extern "C" void app_main()
 	esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
 
     /* Driver de-init */
-    gps_deinit();
     dustsensor_deinit();
-
-    /* De-init GPIO Led */
-    gpio_led_deinit();
     i2c_master_deinit();
     lora_module_deinit();
+    gpio_led_deinit();
 
     /* Deep Sleep */
     ESP_LOGI(TAG, "Entering deep sleep\r\n");
@@ -323,38 +302,19 @@ static void lora_module_init(void)
 	err = nvs_flash_init();
 	ESP_ERROR_CHECK(err);
 
-
+    // Do provisioning only once, keys are stored in nvs
 	if (!ttn.isProvisioned())
 	{
 		ESP_LOGI(TAG, "Starting TTN provisioning!\r\n");
 		ttn.provision(devEui, appEui, appKey);
 	}
-
+    // Set the callback whenever we receive messages
     ttn.onMessage(receive_ttn_message);
 }
 
 static void lora_module_deinit(void)
 {
     /* TODO: un initialize SPI */
-}
-
-static void gps_init(void)
-{
-	/* NMEA parser configuration */
-	nmea_parser_config_t config = NMEA_PARSER_CONFIG_DEFAULT();
-    /* Set UART and the RX pin */
-    config.uart.uart_port = (uart_port_t) GPS_UART_PORT;
-    config.uart.rx_pin = CONFIG_GPS_UART_RX_PIN;
-	/* init NMEA parser library */
-	nmea_hdl = nmea_parser_init(&config);
-	/* register event handler for NMEA parser library */
-	nmea_parser_add_handler(nmea_hdl, gps_event_handler, NULL);
-}
-
-static void gps_deinit(void)
-{
-    if ( nmea_parser_deinit(nmea_hdl) != ESP_OK)
-        ESP_LOGE(TAG, "GPS de-initialization error!\r\n");
 }
 
 static void dustsensor_init(void)
@@ -373,39 +333,6 @@ static void dustsensor_deinit(void)
 {
    if (dustsensor_parser_deinit( dustsensor_hdl ) != ESP_OK)
        ESP_LOGE(TAG, "Dustsensor de-initialization error!\r\n");
-}
-
-/**
-* @brief GPS Event Handler
-*
-* @param event_handler_arg handler specific arguments
-* @param event_base event base, here is fixed to ESP_NMEA_EVENT
-* @param event_id event id
-* @param event_data event specific arguments
-*/
-static void gps_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
-{
-   gps_t *gps = NULL;
-   switch (event_id) {
-   case GPS_UPDATE:
-       gps = (gps_t *)event_data;
-       /* print information parsed from GPS statements */
-       ESP_LOGI(TAG, "%d/%d/%d %d:%d:%d => \r\n"
-		"\tlatitude   = %.05f°N\r\n"
-		"\tlongtitude = %.05f°E\r\n"
-		"\taltitude   = %.02fm\r\n"
-		"\tspeed      = %fm/s",
-		gps->date.year + YEAR_BASE, gps->date.month, gps->date.day,
-		gps->tim.hour + TIME_ZONE, gps->tim.minute, gps->tim.second,
-		gps->latitude, gps->longitude, gps->altitude, gps->speed);
-       break;
-   case GPS_UNKNOWN:
-       /* print unknown statements */
-       ESP_LOGW(TAG, "Unknown statement:%s", (char *)event_data);
-       break;
-   default:
-       break;
-   }
 }
 
 static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
@@ -439,33 +366,46 @@ static void dustsensor_event_handler(void *event_handler_arg, esp_event_base_t e
 static void main_task(void * arg)
 {
     main_task_message_t * msg;
-	ESP_LOGI(TAG,"Joining TTN ...\r\n");
+    float currTemp = 0.0;
+    float currHumid = 0.0;
+    bool hasDustData = false;
+
+    ESP_LOGI(TAG,"Joining TTN ...\r\n");
 
     if (ttn.join())
     {
         ESP_LOGI(TAG, "Join accepted, main event loop started!\r\n");
-        while(1)
+
+        // Reset the payload buffer
+        lpp.reset();
+        
+        // Get the temperature and humidity
+        if ( hdc1080_read_temperature(I2C_MASTER_NUM, &currTemp, &currHumid) == ESP_OK)
+        {
+            printf("Current temperature = %.2f C, Relative Humidity = %.2f %%\n", 
+                    currTemp, currHumid);
+        }
+
+        lpp.addTemperature(0, currTemp);
+        lpp.addRelativeHumidity(1, currHumid);    
+
+        // Loop untill we get dust data from our dust sensor
+        while(!hasDustData)
         {
             xQueueReceive(main_task_queue, &( msg ), portMAX_DELAY);
-
             switch(msg->event)
             {
-                case EV_GPS_UPDATE:
-                    break;
                 case EV_DUST_DATA_UPDATE:
-                    break;
-                case EV_LORA_MSG_RECV:
-                    break;
-                case EV_TEMP_HUMIDITY_UPDATE:
+                    // TODO: Add dust data to lpp payload
+                    hasDustData = true;
                     break;
                 default:
                     ESP_LOGE(TAG, "Unknown event type!\r\n");
             }
-
-            /* TODO: Determine if we need to shutdown! */
-            send_ttn_message();
-            break;
         }
+        /* Send the message to ttn */
+        send_ttn_message();
+
     }else
     {
         ESP_LOGE(TAG, "Failed to join TTN, restarting!\r\n");
@@ -479,26 +419,6 @@ static void main_task(void * arg)
 
 void send_ttn_message()
 {
-    float currTemp = 0.0;
-    float currHumid = 0.0;
-    float waterLevel = 0.0;
-
-    lpp.reset();
-
-    printf("Waiting for next available transmit event ...\n");
-    if ( hdc1080_read_temperature(I2C_MASTER_NUM, &currTemp, &currHumid) == ESP_OK)
-    {
-
-        printf("Current temperature = %.2f C, Relative Humidity = %.2f %%\n", 
-                currTemp, currHumid);
-    }
-
-    // for now random values for water level
-    waterLevel = rand() % 10 + 1;
-    lpp.addTemperature(0, currTemp);
-    lpp.addRelativeHumidity(1, currHumid);    
-    lpp.addAnalogInput(2, waterLevel); 
-
 
     TTNResponseCode res = ttn.transmitMessage(lpp.getBuffer(), lpp.getSize());
     printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
