@@ -331,6 +331,8 @@ static void dustsensor_init(void)
 
 static void dustsensor_deinit(void)
 {
+   // If the sleep enable pin is attached, we inhibit the 
+   // sleep pin here.
    if (dustsensor_parser_deinit( dustsensor_hdl ) != ESP_OK)
        ESP_LOGE(TAG, "Dustsensor de-initialization error!\r\n");
 }
@@ -376,6 +378,11 @@ static void main_task(void * arg)
     {
         ESP_LOGI(TAG, "Join accepted, main event loop started!\r\n");
 
+        // TODO: Determine if it's raining based on the rain sensor
+        // If it's raining, then don't allow our module to do a deep
+        // sleep, instead do loop here untill its time to do a deep
+        // sleep again (rain has stopped)
+
         // Reset the payload buffer
         lpp.reset();
         
@@ -403,6 +410,7 @@ static void main_task(void * arg)
                     ESP_LOGE(TAG, "Unknown event type!\r\n");
             }
         }
+
         /* Send the message to ttn */
         send_ttn_message();
 
