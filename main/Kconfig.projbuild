@@ -31,7 +31,7 @@ menu "Plantower PMS5003"
 
 choice DUSTSENSOR_UART_PORT
     prompt "UART Port for Plantower PMS5003"
-    default DUSTSENSOR_UART_PORT_1
+    default DUSTSENSOR_UART_PORT_2
     help
         UART1 and UART2 are available, UART0 is used for debugging.
 
@@ -46,7 +46,7 @@ endchoice
 config DUSTSENSOR_UART_RX_PIN 
     int "UART GPIO number"
     range 0 34
-    default 4 
+    default 16
     help
         GPIO number for the UART RX pin.
 
