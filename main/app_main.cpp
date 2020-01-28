@@ -147,7 +147,6 @@ static void main_task(void * arg);
  * Forward declarations   *
  *                        *
  **************************/
-void send_ttn_message(void);
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port);
 
 /**************************
@@ -415,7 +414,9 @@ static void main_task(void * arg)
         }
 
         /* Send the message to ttn */
-        send_ttn_message();
+        TTNResponseCode res = ttn.transmitMessage(lpp.getBuffer(), lpp.getSize());
+        printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
+
 
     }else
     {
@@ -428,13 +429,6 @@ static void main_task(void * arg)
     vTaskDelete(NULL);
 }
 
-void send_ttn_message()
-{
-
-    TTNResponseCode res = ttn.transmitMessage(lpp.getBuffer(), lpp.getSize());
-    printf(res == kTTNSuccessfulTransmission ? "Message sent.\n" : "Transmission failed.\n");
-
-}
 
 void receive_ttn_message(const uint8_t* message, size_t length, port_t port)
 {
