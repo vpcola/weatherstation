@@ -221,6 +221,9 @@ extern "C" void app_main()
 	ESP_LOGI(TAG, "Enabling timer wakeup, %ds\r\n", wakeup_time_sec);
 	esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);    
 
+    /* Disable the lora radio */
+    ttn.shutdown();
+
     /* Driver de-init */
     dustsensor_deinit();
     i2c_master_deinit();
@@ -396,7 +399,7 @@ static void main_task(void * arg)
         lpp.addTemperature(0, currTemp);
         lpp.addRelativeHumidity(1, currHumid);    
 
-        // Loop untill we get dust data from our dust sensor
+        // Loop untill we get data from our sensors (including dust data from our dust sensor)
         while(!hasDustData)
         {
             xQueueReceive(main_task_queue, &( msg ), portMAX_DELAY);
